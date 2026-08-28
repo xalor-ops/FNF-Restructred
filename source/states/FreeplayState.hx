@@ -27,6 +27,16 @@ class FreeplayState extends MusicBeatState
 	var curDifficulty:Int = -1;
 	private static var lastDifficultyName:String = Difficulty.getDefault();
 
+	// Mix switching (BF Mix / Pico Mix, etc). Index 0 is always the normal/BF mix (no suffix).
+	// To add another mix later, add its display name to mixNames and its data folder suffix to mixSuffixes.
+	private static var mixNames:Array<String> = ['BF', 'Pico'];
+	private static var mixSuffixes:Array<String> = ['', '-pico'];
+	private static var curMix:Int = 0;
+
+	var mixText:FlxText;
+	var mixLeftArrow:FlxText;
+	var mixRightArrow:FlxText;
+
 	var scoreBG:FlxSprite;
 	var scoreText:FlxText;
 	var diffText:FlxText;
@@ -79,33 +89,6 @@ class FreeplayState extends MusicBeatState
 			return;
 		}
 
-		for (i in 0...WeekData.weeksList.length)
-		{
-			if(weekIsLocked(WeekData.weeksList[i])) continue;
-
-			var leWeek:WeekData = WeekData.weeksLoaded.get(WeekData.weeksList[i]);
-			var leSongs:Array<String> = [];
-			var leChars:Array<String> = [];
-
-			for (j in 0...leWeek.songs.length)
-			{
-				leSongs.push(leWeek.songs[j][0]);
-				leChars.push(leWeek.songs[j][1]);
-			}
-
-			WeekData.setDirectoryFromWeek(leWeek);
-			for (song in leWeek.songs)
-			{
-				var colors:Array<Int> = song[2];
-				if(colors == null || colors.length < 3)
-				{
-					colors = [146, 113, 253];
-				}
-				addSong(song[0], i, song[1], FlxColor.fromRGB(colors[0], colors[1], colors[2]));
-			}
-		}
-		Mods.loadTopMod();
-
 		bg = new FlxSprite().loadGraphic(Paths.image('menuDesat'));
 		bg.antialiasing = ClientPrefs.data.antialiasing;
 		add(bg);
@@ -114,33 +97,31 @@ class FreeplayState extends MusicBeatState
 		grpSongs = new FlxTypedGroup<Alphabet>();
 		add(grpSongs);
 
-		for (i in 0...songs.length)
-		{
-			var songText:Alphabet = new Alphabet(90, 320, songs[i].songName, true);
-			songText.targetY = i;
-			grpSongs.add(songText);
+		// Mix label, top of the screen. e.g. "< BF MIX >" / "< PICO MIX >"
+		mixText = new FlxText(0, 4, FlxG.width, '', 28);
+		mixText.setFormat(Paths.font("vcr.ttf"), 28, FlxColor.WHITE, CENTER, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
+		mixText.scrollFactor.set();
+		add(mixText);
 
-			songText.scaleX = Math.min(1, 980 / songText.width);
-			songText.snapToPosition();
+		#if mobile
+		// Tap zones flanking the mix label, since A/D (desktop) aren't available as taps and
+		// the D-pad's left/right is already used for difficulty.
+		mixLeftArrow = new FlxText(0, mixText.y, 60, '<', 28);
+		mixLeftArrow.setFormat(Paths.font("vcr.ttf"), 28, FlxColor.WHITE, CENTER, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
+		mixLeftArrow.scrollFactor.set();
+		mixLeftArrow.screenCenter(X);
+		mixLeftArrow.x -= 110;
+		add(mixLeftArrow);
 
-			Mods.currentModDirectory = songs[i].folder;
-			var icon:HealthIcon = new HealthIcon(songs[i].songCharacter);
-			icon.sprTracker = songText;
+		mixRightArrow = new FlxText(0, mixText.y, 60, '>', 28);
+		mixRightArrow.setFormat(Paths.font("vcr.ttf"), 28, FlxColor.WHITE, CENTER, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
+		mixRightArrow.scrollFactor.set();
+		mixRightArrow.screenCenter(X);
+		mixRightArrow.x += 110;
+		add(mixRightArrow);
+		#end
 
-			
-			// too laggy with a lot of songs, so i had to recode the logic for it
-			songText.visible = songText.active = songText.isMenuItem = false;
-			icon.visible = icon.active = false;
-
-			// using a FlxGroup is too much fuss!
-			iconArray.push(icon);
-			add(icon);
-
-			// songText.x += 40;
-			// DONT PUT X IN THE FIRST PARAMETER OF new ALPHABET() !!
-			// songText.screenCenter(X);
-		}
-		WeekData.setDirectoryFromWeek();
+		reloadSongs();
 
 		scoreText = new FlxText(FlxG.width * 0.7, 5, 0, "", 32);
 		scoreText.setFormat(Paths.font("vcr.ttf"), 32, FlxColor.WHITE, RIGHT);
@@ -167,11 +148,6 @@ class FreeplayState extends MusicBeatState
 		missingText.visible = false;
 		add(missingText);
 
-		if(curSelected >= songs.length) curSelected = 0;
-		bg.color = songs[curSelected].color;
-		intendedColor = bg.color;
-		lerpSelected = curSelected;
-
 		curDifficulty = Math.round(Math.max(0, Difficulty.defaultList.indexOf(lastDifficultyName)));
 
 		bottomBG = new FlxSprite(0, FlxG.height - 26).makeGraphic(FlxG.width, 26, 0xFF000000);
@@ -195,6 +171,7 @@ class FreeplayState extends MusicBeatState
 		
 		changeSelection();
 		updateTexts();
+		updateMixText();
 
 		#if mobile
 		addTouchPad('LEFT_FULL', 'A_B_C_X_Y_Z');
@@ -215,9 +192,9 @@ class FreeplayState extends MusicBeatState
 		#end
 	}
 
-	public function addSong(songName:String, weekNum:Int, songCharacter:String, color:Int)
+	public function addSong(songName:String, weekNum:Int, songCharacter:String, color:Int, ?displayName:String)
 	{
-		songs.push(new SongMetadata(songName, weekNum, songCharacter, color));
+		songs.push(new SongMetadata(songName, weekNum, songCharacter, color, displayName));
 	}
 
 	function weekIsLocked(name:String):Bool
@@ -315,6 +292,28 @@ class FreeplayState extends MusicBeatState
 				changeDiff(1);
 				_updateSongLastDifficulty();
 			}
+
+			// Mix switching. Desktop: A/D (left/right arrows are already difficulty above).
+			if(FlxG.keys.justPressed.A)
+			{
+				changeMix(-1);
+			}
+			else if(FlxG.keys.justPressed.D)
+			{
+				changeMix(1);
+			}
+
+			#if mobile
+			// Mobile: tap the arrows flanking the mix label (D-pad left/right is already difficulty,
+			// and every face button is already spoken for, so this uses dedicated tap zones instead).
+			if(FlxG.mouse.justPressed)
+			{
+				if(mixLeftArrow != null && FlxG.mouse.overlaps(mixLeftArrow))
+					changeMix(-1);
+				else if(mixRightArrow != null && FlxG.mouse.overlaps(mixRightArrow))
+					changeMix(1);
+			}
+			#end
 		}
 
 		if (controls.BACK)
@@ -529,6 +528,158 @@ class FreeplayState extends MusicBeatState
 		missingTextBG.visible = false;
 	}
 
+	/**
+	 * Rebuilds `songs` and the on-screen song list (Alphabet + HealthIcon objects) for whatever
+	 * `curMix` currently is. For the BF mix this reproduces every unlocked song exactly as before.
+	 * For a suffixed mix (e.g. Pico, suffix "-pico") only songs that actually have a chart at
+	 * data/<song>-pico/<song>-pico.json are included; the rest are skipped.
+	 */
+	function reloadSongs()
+	{
+		for (song in grpSongs.members)
+		{
+			if(song != null) song.destroy();
+		}
+		grpSongs.clear();
+
+		for (icon in iconArray)
+		{
+			remove(icon);
+			icon.destroy();
+		}
+		iconArray = [];
+
+		songs = [];
+
+		var mixSuffix:String = mixSuffixes[curMix];
+
+		for (i in 0...WeekData.weeksList.length)
+		{
+			if(weekIsLocked(WeekData.weeksList[i])) continue;
+
+			var leWeek:WeekData = WeekData.weeksLoaded.get(WeekData.weeksList[i]);
+			WeekData.setDirectoryFromWeek(leWeek);
+
+			for (song in leWeek.songs)
+			{
+				var colors:Array<Int> = song[2];
+				if(colors == null || colors.length < 3)
+				{
+					colors = [146, 113, 253];
+				}
+
+				var baseSongName:String = song[0];
+
+				if(mixSuffix.length > 0)
+				{
+					if(!songHasMixVersion(baseSongName, mixSuffix)) continue; // no chart for this mix, skip it
+
+					addSong(baseSongName + mixSuffix, i, song[1], FlxColor.fromRGB(colors[0], colors[1], colors[2]), baseSongName + ' ' + mixNames[curMix] + ' Mix');
+				}
+				else
+				{
+					addSong(baseSongName, i, song[1], FlxColor.fromRGB(colors[0], colors[1], colors[2]));
+				}
+			}
+		}
+		Mods.loadTopMod();
+
+		for (i in 0...songs.length)
+		{
+			var songText:Alphabet = new Alphabet(90, 320, songs[i].displayName, true);
+			songText.targetY = i;
+			grpSongs.add(songText);
+
+			songText.scaleX = Math.min(1, 980 / songText.width);
+			songText.snapToPosition();
+
+			Mods.currentModDirectory = songs[i].folder;
+			var icon:HealthIcon = new HealthIcon(songs[i].songCharacter);
+			icon.sprTracker = songText;
+
+			songText.visible = songText.active = songText.isMenuItem = false;
+			icon.visible = icon.active = false;
+
+			iconArray.push(icon);
+			add(icon);
+		}
+		WeekData.setDirectoryFromWeek();
+
+		if(curSelected >= songs.length) curSelected = 0;
+		if(songs.length > 0)
+		{
+			bg.color = songs[curSelected].color;
+			intendedColor = bg.color;
+			lerpSelected = curSelected;
+		}
+
+		_lastVisibles = []; // avoid stale indices from the old (possibly longer) list
+	}
+
+	/** Checks whether `songName` has a chart for the given mix suffix, e.g. "-pico". */
+	function songHasMixVersion(songName:String, suffix:String):Bool
+	{
+		if(suffix == null || suffix.length < 1) return true;
+
+		var checkName:String = Paths.formatToSongPath(songName) + suffix;
+		var exists:Bool = false;
+		try
+		{
+			var jsonPath:String = Paths.getPath('data/' + checkName + '/' + checkName + '.json', TEXT);
+			#if MODS_ALLOWED
+			exists = sys.FileSystem.exists(jsonPath) || Assets.exists(jsonPath);
+			#else
+			exists = Assets.exists(jsonPath);
+			#end
+		}
+		catch(e:Dynamic) {}
+		return exists;
+	}
+
+	function changeMix(change:Int = 0)
+	{
+		if (player.playingMusic)
+			return;
+
+		if(change != 0)
+		{
+			curMix = FlxMath.wrap(curMix + change, 0, mixNames.length - 1);
+			FlxG.sound.play(Paths.sound('scrollMenu'), 0.4);
+
+			reloadSongs();
+
+			if(songs.length < 1)
+			{
+				// Nothing available for this mix (e.g. no -pico charts at all yet) - bounce back to BF.
+				curMix = 0;
+				reloadSongs();
+
+				missingText.text = 'NO SONGS AVAILABLE FOR THIS MIX';
+				missingText.screenCenter(Y);
+				missingText.visible = true;
+				missingTextBG.visible = true;
+			}
+			else
+			{
+				missingText.visible = false;
+				missingTextBG.visible = false;
+			}
+
+			changeSelection(0, false);
+			updateTexts();
+		}
+
+		updateMixText();
+	}
+
+	function updateMixText()
+	{
+		if(mixNames.length > 1)
+			mixText.text = '< ' + mixNames[curMix].toUpperCase() + ' MIX >';
+		else
+			mixText.text = mixNames[curMix].toUpperCase() + ' MIX';
+	}
+
 	function changeSelection(change:Int = 0, playSound:Bool = true)
 	{
 		if (player.playingMusic)
@@ -629,15 +780,17 @@ class FreeplayState extends MusicBeatState
 class SongMetadata
 {
 	public var songName:String = "";
+	public var displayName:String = "";
 	public var week:Int = 0;
 	public var songCharacter:String = "";
 	public var color:Int = -7179779;
 	public var folder:String = "";
 	public var lastDifficulty:String = null;
 
-	public function new(song:String, week:Int, songCharacter:String, color:Int)
+	public function new(song:String, week:Int, songCharacter:String, color:Int, ?displayName:String)
 	{
 		this.songName = song;
+		this.displayName = (displayName != null) ? displayName : song;
 		this.week = week;
 		this.songCharacter = songCharacter;
 		this.color = color;
